@@ -1,1 +1,215 @@
 
+name: Build riddKasep AI APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "utama" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ambil source repository
+        uses: actions/checkout@v4
+
+      - name: Siapkan Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Siapkan Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Siapkan Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Buat proyek Android
+        shell: bash
+        run: |
+          mkdir -p app/src/main/assets
+          mkdir -p app/src/main/java/com/riddkasep/ai
+
+          cp riddkasep_ai_working_floating_ai.html app/src/main/assets/index.html
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "riddKasepAI"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.riddkasep.ai'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.riddkasep.ai'
+                  minSdk 23
+                  targetSdk 28
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+
+              <application
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar"
+                  android:label="riddKasep AI"
+                  android:usesCleartextTraffic="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".FloatingService"
+                      android:exported="false"/>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/riddkasep/ai/MainActivity.java <<'EOF'
+          package com.riddkasep.ai;
+
+          import android.app.*;
+          import android.os.*;
+          import android.content.*;
+          import android.net.Uri;
+          import android.provider.Settings;
+          import android.webkit.*;
+          import android.widget.*;
+
+          public class MainActivity extends Activity {
+              public void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(1);
+
+                  WebView web = new WebView(this);
+                  web.getSettings().setJavaScriptEnabled(true);
+                  web.loadUrl("file:///android_asset/index.html");
+                  layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
+
+                  Button button = new Button(this);
+                  button.setText("Aktifkan Floating Window");
+                  button.setOnClickListener(v -> {
+                      if (!Settings.canDrawOverlays(this)) {
+                          Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                              Uri.parse("package:" + getPackageName()));
+                          startActivity(i);
+                      } else {
+                          startService(new Intent(this, FloatingService.class));
+                          Toast.makeText(this, "Floating aktif", Toast.LENGTH_SHORT).show();
+                      }
+                  });
+                  layout.addView(button);
+                  setContentView(layout);
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/riddkasep/ai/FloatingService.java <<'EOF'
+          package com.riddkasep.ai;
+
+          import android.app.*;
+          import android.os.*;
+          import android.content.*;
+          import android.graphics.PixelFormat;
+          import android.view.*;
+          import android.webkit.*;
+          import android.widget.*;
+
+          public class FloatingService extends Service {
+              WindowManager manager;
+              View window;
+
+              public IBinder onBind(Intent i) { return null; }
+
+              public int onStartCommand(Intent i, int flags, int id) {
+                  if (window != null) return START_NOT_STICKY;
+
+                  manager = (WindowManager)getSystemService(WINDOW_SERVICE);
+                  WebView web = new WebView(this);
+                  web.getSettings().setJavaScriptEnabled(true);
+                  web.loadUrl("file:///android_asset/index.html");
+                  window = web;
+
+                  int type = Build.VERSION.SDK_INT >= 26
+                      ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                      : WindowManager.LayoutParams.TYPE_PHONE;
+
+                  WindowManager.LayoutParams p = new WindowManager.LayoutParams(
+                      320, 480, type,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                      PixelFormat.TRANSLUCENT
+                  );
+                  p.gravity = Gravity.TOP | Gravity.END;
+                  p.x = 20;
+                  p.y = 100;
+
+                  try {
+                      manager.addView(window, p);
+                  } catch (Exception e) {
+                      stopSelf();
+                  }
+                  return START_NOT_STICKY;
+              }
+
+              public void onDestroy() {
+                  if (window != null) {
+                      manager.removeView(window);
+                      window = null;
+                  }
+                  super.onDestroy();
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: |
+          gradle assembleDebug
+
+      - name: Simpan APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: riddKasep-AI-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          
